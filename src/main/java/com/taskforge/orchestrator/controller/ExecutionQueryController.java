@@ -40,6 +40,11 @@ public class ExecutionQueryController {
         return ResponseEntity.ok(taskExecutionRepository.findByExecutionId(executionId));
     }
 
+    @GetMapping("/workspaces/{workspaceId}/executions")
+    public ResponseEntity<List<ExecutionEntity>> listExecutionsByWorkspace(@PathVariable UUID workspaceId) {
+        return ResponseEntity.ok(executionRepository.findByWorkspaceIdOrderByCreatedAtDesc(workspaceId));
+    }
+
     @PostMapping("/executions/{executionId}/cancel")
     public ResponseEntity<Map<String, String>> cancelExecution(@PathVariable UUID executionId) {
         executionEngine.cancelExecution(executionId);
