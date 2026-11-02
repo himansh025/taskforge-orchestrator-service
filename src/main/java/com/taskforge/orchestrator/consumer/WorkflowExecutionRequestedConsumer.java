@@ -46,6 +46,29 @@ public class WorkflowExecutionRequestedConsumer {
         WorkflowExecutionRequestedData data = envelope.getData();
         UUID executionId = UUID.fromString(data.getExecutionId());
 
+        DagDefinition dag;
+        String definitionJson = data.getDefinitionJson();
+        if (definitionJson != null && !definitionJson.isBlank()) {
+            dag = objectMapper.readValue(definitionJson, DagDefinition.class);
+        } else {
+            dag = new DagDefinition();
+            DagDefinition.DagNode n1 = new DagDefinition.DagNode();
+            n1.setId("node-1");
+            n1.setName("CSV Intake");
+            n1.setType("CSV_VALIDATE");
+            DagDefinition.DagNode n2 = new DagDefinition.DagNode();
+            n2.setId("node-2");
+            n2.setName("Data Transform");
+            n2.setType("DATA_TRANSFORM");
+            dag.getNodes().add(n1);
+            dag.getNodes().add(n2);
+            DagDefinition.DagEdge edge = new DagDefinition.DagEdge();
+            edge.setFrom("node-1");
+            edge.setTo("node-2");
+            dag.getEdges().add(edge);
+            definitionJson = objectMapper.writeValueAsString(dag);
+        }
+
         ExecutionEntity execution = ExecutionEntity.builder()
                 .id(executionId)
                 .workspaceId(UUID.fromString(envelope.getWorkspaceId()))
@@ -54,6 +77,7 @@ public class WorkflowExecutionRequestedConsumer {
                 .status(ExecutionStatus.PENDING)
                 .triggerType(data.getTriggerType())
                 .inputPayload(objectMapper.writeValueAsString(data.getInput()))
+                .definitionPayload(definitionJson)
                 .startedAt(Instant.now())
                 .build();
 
@@ -63,20 +87,7 @@ public class WorkflowExecutionRequestedConsumer {
                 .consumerGroup("orchestrator-service-group")
                 .build());
 
-        // Simple default DAG if definition not yet loaded over wire
-        DagDefinition dag = new DagDefinition();
-        dag.getNodes().add(createNode("node-1", "Invoice Intake", com.taskforge.common.model.TaskType.CSV_VALIDATE));
-        dag.getNodes().add(createNode("node-2", "Process & Transform", com.taskforge.common.model.TaskType.DATA_TRANSFORM));
-        dag.getNodes().add(createNode("node-3", "Send Summary", com.taskforge.common.model.TaskType.SEND_EMAIL));
-
+        log.info("Starting DAG execution for executionId={}, total nodes={}", executionId, dag.getNodes().size());
         executionEngine.startExecution(execution, dag);
-    }
-
-    private DagDefinition.DagNode createNode(String id, String name, com.taskforge.common.model.TaskType type) {
-        DagDefinition.DagNode n = new DagDefinition.DagNode();
-        n.setId(id);
-        n.setName(name);
-        n.setType(type);
-        return n;
     }
 }

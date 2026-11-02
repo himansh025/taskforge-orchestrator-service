@@ -6,5 +6,6 @@ public enum TaskExecutionStatus {
     RUNNING,
     COMPLETED,
     FAILED,
-    SKIPPED
+    SKIPPED,
+    CANCELLED
 }

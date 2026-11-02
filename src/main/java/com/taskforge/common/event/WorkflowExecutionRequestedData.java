@@ -18,4 +18,5 @@ public class WorkflowExecutionRequestedData {
     private String triggerType;
     private Map<String, Object> input;
     private String definitionHash;
+    private String definitionJson;
 }

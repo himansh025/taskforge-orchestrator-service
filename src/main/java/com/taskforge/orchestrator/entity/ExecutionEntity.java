@@ -4,7 +4,9 @@ import com.taskforge.common.model.ExecutionStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -42,11 +44,16 @@ public class ExecutionEntity {
     @Column(name = "triggered_by")
     private UUID triggeredBy;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "input_payload", columnDefinition = "JSONB")
     private String inputPayload;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "output_payload", columnDefinition = "JSONB")
     private String outputPayload;
+
+    @Column(name = "definition_payload", columnDefinition = "TEXT")
+    private String definitionPayload;
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;

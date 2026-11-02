@@ -5,7 +5,9 @@ import com.taskforge.common.model.TaskType;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -46,9 +48,11 @@ public class TaskExecutionEntity {
     @Builder.Default
     private int maxRetries = 3;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "input_payload", columnDefinition = "JSONB")
     private String inputPayload;
 
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "output_payload", columnDefinition = "JSONB")
     private String outputPayload;
 
