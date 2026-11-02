@@ -43,10 +43,15 @@ public class DagExecutionEngine {
         execution.setStartedAt(Instant.now());
         executionRepository.save(execution);
 
-        Map<String, Object> initialInput = Collections.emptyMap();
+        Map<String, Object> initialInput = new HashMap<>();
         if (execution.getInputPayload() != null && !execution.getInputPayload().isBlank()) {
             try {
-                initialInput = objectMapper.readValue(execution.getInputPayload(), new TypeReference<>() {});
+                Map<String, Object> raw = objectMapper.readValue(execution.getInputPayload(), new TypeReference<>() {});
+                if (raw.get("input") instanceof Map<?, ?> nested) {
+                    nested.forEach((k, v) -> initialInput.put(String.valueOf(k), v));
+                } else {
+                    initialInput.putAll(raw);
+                }
             } catch (Exception e) {
                 log.warn("Failed to parse initial input: {}", e.getMessage());
             }
@@ -134,7 +139,12 @@ public class DagExecutionEngine {
                         Map<String, Object> childInput = new HashMap<>();
                         if (execution.getInputPayload() != null) {
                             try {
-                                childInput.putAll(objectMapper.readValue(execution.getInputPayload(), new TypeReference<>() {}));
+                                Map<String, Object> raw = objectMapper.readValue(execution.getInputPayload(), new TypeReference<>() {});
+                                if (raw.get("input") instanceof Map<?, ?> nested) {
+                                    nested.forEach((k, v) -> childInput.put(String.valueOf(k), v));
+                                } else {
+                                    childInput.putAll(raw);
+                                }
                             } catch (Exception ignored) {}
                         }
                         if (output != null) {
@@ -183,6 +193,7 @@ public class DagExecutionEngine {
 
             log.info("Retrying task {} for execution {} (attempt {})", nodeId, executionId, task.getCurrentAttempt());
             broadcastProgress(executionId, "RUNNING", "Retrying task: " + nodeId + " (attempt " + task.getCurrentAttempt() + ")", nodeId, 0, 1);
+            redispatchTask(execution, task);
             return;
         }
 
@@ -199,6 +210,82 @@ public class DagExecutionEngine {
         log.error("Execution {} FAILED at node {}: {}", executionId, nodeId, errorMessage);
         broadcastProgress(executionId, "FAILED", errorMessage, nodeId, 0, 1);
         emitExecutionUpdated(execution, 0, 1);
+    }
+
+    @Transactional
+    public void retryExecution(UUID executionId) {
+        ExecutionEntity execution = executionRepository.findById(executionId)
+                .orElseThrow(() -> new IllegalArgumentException("Execution not found: " + executionId));
+
+        if (execution.getStatus() != ExecutionStatus.FAILED) {
+            throw new IllegalStateException("Only FAILED executions can be retried. Current status: " + execution.getStatus());
+        }
+
+        List<TaskExecutionEntity> failedTasks = taskExecutionRepository.findByExecutionId(executionId).stream()
+                .filter(t -> t.getStatus() == TaskExecutionStatus.FAILED)
+                .toList();
+
+        if (failedTasks.isEmpty()) {
+            throw new IllegalStateException("No failed tasks found to retry in execution: " + executionId);
+        }
+
+        execution.setStatus(ExecutionStatus.RUNNING);
+        execution.setErrorMessage(null);
+        execution.setFinishedAt(null);
+        executionRepository.save(execution);
+
+        for (TaskExecutionEntity task : failedTasks) {
+            task.setCurrentAttempt(task.getCurrentAttempt() + 1);
+            task.setStatus(TaskExecutionStatus.DISPATCHED);
+            task.setErrorMessage(null);
+            task.setFinishedAt(null);
+            taskExecutionRepository.save(task);
+
+            redispatchTask(execution, task);
+        }
+
+        broadcastProgress(executionId, "RUNNING", "Retrying failed task(s)", null, 0, 1);
+    }
+
+    @SneakyThrows
+    private void redispatchTask(ExecutionEntity execution, TaskExecutionEntity task) {
+        Map<String, Object> input = new HashMap<>();
+        if (task.getInputPayload() != null && !task.getInputPayload().isBlank()) {
+            try {
+                input = objectMapper.readValue(task.getInputPayload(), new TypeReference<>() {});
+            } catch (Exception ignored) {}
+        }
+
+        TaskRequestedData data = TaskRequestedData.builder()
+                .executionId(execution.getId().toString())
+                .workflowId(execution.getWorkflowId().toString())
+                .taskExecutionId(task.getId().toString())
+                .nodeId(task.getNodeId())
+                .taskType(task.getTaskType())
+                .attempt(task.getCurrentAttempt())
+                .input(input)
+                .timeoutSeconds(300)
+                .build();
+
+        EventEnvelope<TaskRequestedData> envelope = EventEnvelope.<TaskRequestedData>builder()
+                .eventType("task.requested")
+                .workspaceId(execution.getWorkspaceId().toString())
+                .correlationId(execution.getId().toString())
+                .producer("orchestrator-service")
+                .data(data)
+                .build();
+
+        EngineOutboxEntity outbox = EngineOutboxEntity.builder()
+                .aggregateType("TaskExecution")
+                .aggregateId(task.getId().toString())
+                .eventType("task.requested")
+                .topic("task.requested.v1")
+                .payload(objectMapper.writeValueAsString(envelope))
+                .status("PENDING")
+                .build();
+
+        outboxRepository.save(outbox);
+        log.info("Dispatched retry for task {} (attempt {}) in execution {}", task.getNodeId(), task.getCurrentAttempt(), execution.getId());
     }
 
     @Transactional
@@ -285,14 +372,20 @@ public class DagExecutionEngine {
         String expected = edge.getConditionValue() != null ? edge.getConditionValue().toLowerCase() : edge.getLabel().toLowerCase();
         Object branch = output.get("branch");
         Object result = output.get("result");
+        Object condResult = output.get("conditionResult");
 
         if (branch != null) {
-            return expected.contains(branch.toString().toLowerCase());
+            String b = branch.toString().toLowerCase();
+            if (b.contains(expected) || expected.contains(b)) return true;
+        }
+        if (condResult instanceof Boolean b) {
+            if (b && (expected.contains("pass") || expected.contains("true") || expected.contains("yes"))) return true;
+            if (!b && (expected.contains("fail") || expected.contains("false") || expected.contains("no") || expected.contains("review"))) return true;
         }
         if (result != null) {
             if (result instanceof Boolean b) {
-                return (b && expected.contains("pass") || expected.contains("true")) ||
-                       (!b && expected.contains("fail") || expected.contains("review") || expected.contains("false"));
+                return (b && (expected.contains("pass") || expected.contains("true"))) ||
+                       (!b && (expected.contains("fail") || expected.contains("review") || expected.contains("false")));
             }
         }
         return true;

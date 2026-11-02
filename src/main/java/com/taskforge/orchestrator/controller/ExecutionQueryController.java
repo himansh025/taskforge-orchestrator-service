@@ -45,4 +45,10 @@ public class ExecutionQueryController {
         executionEngine.cancelExecution(executionId);
         return ResponseEntity.ok(Map.of("message", "Execution cancelled successfully"));
     }
+
+    @PostMapping("/executions/{executionId}/retry")
+    public ResponseEntity<Map<String, String>> retryExecution(@PathVariable UUID executionId) {
+        executionEngine.retryExecution(executionId);
+        return ResponseEntity.ok(Map.of("message", "Execution retry initiated successfully"));
+    }
 }
